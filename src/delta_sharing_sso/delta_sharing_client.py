@@ -7,7 +7,10 @@ from typing import Any
 import delta_sharing
 import fsspec
 import pandas as pd
-from delta_sharing.protocol import Schema, Share, Table
+from delta_sharing.protocol import Schema, Share
+from delta_sharing.protocol import Table as ProtocolTable
+
+from .table import Table, _ShareView
 
 # A token can be passed as a plain string, as an OAuth token response dict,
 # as a callable returning a fresh token string, or as any object with a
@@ -23,6 +26,7 @@ class DeltaSharingClient:
 
         self.base_url = base_url.rstrip("/")
         self._token_source = access_token
+        self._browse_cache: set[tuple[str, str, str]] | None = None
 
     @property
     def access_token(self) -> str:
@@ -89,7 +93,7 @@ class DeltaSharingClient:
         with self._sharing_client() as client:
             return list(client.list_schemas(share))
 
-    def list_tables(self, schema: Schema | str) -> list[Table]:
+    def list_tables(self, schema: Schema | str) -> list[ProtocolTable]:
         """Return all tables in the given schema (a Schema object or "share.schema")."""
         if isinstance(schema, str):
             share_name, schema_name = schema.split(".", 1)
@@ -97,7 +101,7 @@ class DeltaSharingClient:
         with self._sharing_client() as client:
             return list(client.list_tables(schema))
 
-    def list_all_tables(self) -> list[Table]:
+    def list_all_tables(self) -> list[ProtocolTable]:
         """Return every table the caller can access, across all shares and schemas."""
         with self._sharing_client() as client:
             return list(client.list_all_tables())
@@ -110,6 +114,61 @@ class DeltaSharingClient:
             for t in self.list_all_tables()
         ]
         return pd.DataFrame(rows, columns=["share", "schema", "table", "full_name"])
+
+    # ------------------------------------------------------------------ browsing
+
+    def _browse_names(self) -> set[tuple[str, str, str]]:
+        """Cached (share, schema, table) triples, used by .table(), attribute browsing and .find().
+
+        Fetched once, on first use, and reused after that. Call .refresh() if shares change
+        during a session and you need the browsing methods to see the update.
+        """
+        if self._browse_cache is None:
+            self._browse_cache = {(t.share, t.schema, t.name) for t in self.list_all_tables()}
+        return self._browse_cache
+
+    def refresh(self) -> None:
+        """Clear the cached table listing used by .table(), attribute browsing and .find()."""
+        self._browse_cache = None
+
+    def table(self, share: str, schema: str | None = None, table: str | None = None) -> Table:
+        """Return a Table handle. Nothing is downloaded until you use it.
+
+        Accepts either three names, or one dotted string:
+            catalog.table("sales", "public", "orders")
+            catalog.table("sales.public.orders")   # share.schema.table
+            catalog.table("sales.orders")          # share.table, if "orders" is unique within "sales"
+        """
+        if schema is None and table is None:
+            parts = share.split(".")
+            if len(parts) == 3:
+                share, schema, table = parts
+            elif len(parts) == 2:
+                return getattr(_ShareView(self, parts[0]), parts[1])
+            else:
+                raise ValueError(f"{share!r} must be 'share.table' or 'share.schema.table'")
+        return Table(self, share, schema, table)
+
+    def find(self, query: str) -> list[str]:
+        """Full names (share.schema.table) containing `query`, case-insensitive."""
+        query = query.lower()
+        names = {f"{s}.{sc}.{t}" for s, sc, t in self._browse_names()}
+        return sorted(n for n in names if query in n.lower())
+
+    def __getattr__(self, name: str):
+        # only reached when normal attribute lookup fails, so real attributes/methods always win
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name in {s for s, _, _ in self._browse_names()}:
+            return _ShareView(self, name)
+        raise AttributeError(
+            f"{name!r} is not an attribute of DeltaSharingClient and no share is named {name!r}")
+
+    def __getitem__(self, name: str) -> Table:
+        return self.table(name)
+
+    def __dir__(self):
+        return sorted(set(super().__dir__()) | {s for s, _, _ in self._browse_names()})
 
     # ----------------------------------------------------------------- metadata
 

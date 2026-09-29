@@ -3,7 +3,7 @@
     from delta_sharing_sso import Settings, create_client
 
     settings = Settings.from_env()
-    ds_client, login = create_client(settings)
+    catalog, login = create_client(settings)
 
 See .env.example for every setting.
 """

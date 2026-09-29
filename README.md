@@ -28,13 +28,61 @@ jupyter lab                # open explore_and_visualise.ipynb
 
 ```python
 from delta_sharing_sso import create_client
+
+catalog, login = create_client()          # reads .env; opens the browser for AUTH_METHOD=keycloak
+print(catalog.tables_overview())
+```
+
+### Browse tables like a bucket
+
+`catalog` behaves like a bucket you can browse, not just a client you call methods on. `.table()` and the
+attribute-style shortcuts below all return a lazy [`Table`](src/delta_sharing_sso/table.py) handle — nothing
+is downloaded until you read `.columns`/`.version` or call `.to_pandas()`/`.load_changes()`:
+
+```python
+catalog.sales.orders                      # -> Table("sales", "public", "orders"), if "orders" is
+                                           #    unique within the "sales" share
+catalog.sales.public.orders               # the fully-qualified path always works too
+catalog.table("sales.public.orders")      # equivalent, as an explicit call
+catalog["sales.public.orders"]            # bracket form
+
+catalog.find("order")                     # -> ["sales.archive.orders", "sales.public.orders"]
+
+t = catalog.table("sales.public.orders")
+t.columns                                 # column names/types/partition flags, no data downloaded
+t.version
+t.to_pandas(limit=1000)
+```
+
+Inline filters read like plain Python, no need to import `predicates` yourself for the common cases —
+column types for the predicate are looked up from the table's own metadata:
+
+```python
+df = catalog.sales.orders.where(country="DE").to_pandas()
+df = catalog.sales.orders.between("event_date", "2026-05-01", "2026-05-31").to_pandas()
+```
+
+`.where()`/`.between()` return a new `Table` handle rather than mutating the original, so you can build
+several filtered views from the same base handle.
+
+### One-liner, no client at all
+
+```python
+from delta_sharing_sso import read_table
+
+df = read_table("sales.public.orders", limit=1000)   # reads .env, logs in once, and caches the login
+```
+
+### Lower-level access
+
+The full method names (`load_table_as_dataframe`, `get_table_columns`, ...) and `predicates.py` helpers
+(`time_range`, `equal`, `between`, ...) are still there and are what the `Table` handle calls internally —
+reach for them directly when you need a predicate shape the inline filters don't cover:
+
+```python
 from delta_sharing_sso.predicates import time_range
 
-ds, login = create_client()          # reads .env; opens the browser for AUTH_METHOD=keycloak
-print(ds.tables_overview())
-
-cols = ds.get_table_columns("my_share", "my_schema", "my_table")
-df = ds.load_table_as_dataframe(
+df = catalog.load_table_as_dataframe(
     "my_share", "my_schema", "my_table", limit=None,
     json_predicate_hints=time_range("event_date", "2026-05-01", "2026-05-31", fmt="date"),
 )
@@ -46,7 +94,7 @@ The pieces can also be used directly, without `.env` or `create_client`:
 from delta_sharing_sso import KeycloakClient, DeltaSharingClient
 
 kc = KeycloakClient(server_url="...", client_id="...", realm="...")
-ds = DeltaSharingClient(base_url="<DELTA_SHARING_URL>", access_token=kc.get_access_token())
+catalog = DeltaSharingClient(base_url="<DELTA_SHARING_URL>", access_token=kc.get_access_token())
 ```
 
 ## Configuration (`.env`)
@@ -110,6 +158,14 @@ Reads all settings from `.env` (`Settings.from_env()`) and creates a ready-to-us
 - load only changed rows (`load_table_changes_as_dataframe()`), where change data feed is enabled.
 
 `access_token` can be a token string, a token response dict, a callable, or a token provider with `get_access_token()`. Callables and providers are asked for a token on every request, so long-running jobs always use a valid token.
+
+It also supports the bucket-style browsing described above (`.table()`, `.<share>.<table>`, `catalog["..."]`,
+`.find()`). The first browsing call fetches and caches the full table listing (one network round-trip); later
+calls reuse the cache. Call `catalog.refresh()` if shares change during a session and browsing needs to see it.
+
+### `delta_sharing_sso.table`
+
+`Table` is the lazy handle returned by browsing (see *Browse tables like a bucket* above): `.columns`, `.version`, `.to_pandas()`, `.load_changes()`, and the inline filters `.where()` / `.between()`, which return a new handle rather than mutating the original.
 
 ### `delta_sharing_sso.predicates`
 
