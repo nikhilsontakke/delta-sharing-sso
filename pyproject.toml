@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "delta-sharing-sso"
+version = "0.1.0"
+description = "A lightweight Python client for Delta Sharing tables, authenticated via Keycloak / OIDC single sign-on"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Nikhil Sontakke", email = "nikhilsontakke111@gmail.com" },
+]
+keywords = ["delta-sharing", "delta-lake", "keycloak", "oidc", "sso", "data-sharing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "python-keycloak==7.1.1",
+    "delta-sharing==1.4.1",
+    "python-dotenv>=1.0,<2",
+    "pandas>=2.1,<3",
+]
+
+[project.optional-dependencies]
+# Everything the example notebook needs: charts and Jupyter itself.
+notebook = [
+    "jupyterlab>=4.0,<5",
+    "ipykernel>=6.25",
+    "plotly>=5.20,<8",
+    "pyarrow>=14",
+    "openpyxl>=3.1,<4",
+]
+dev = [
+    "delta-sharing-sso[notebook]",
+    "pytest>=8",
+]
+
+[project.scripts]
+delta-sharing-sso-check = "delta_sharing_sso.check_connection:main"
+
+[project.urls]
+Homepage = "https://github.com/nikhilsontakke/delta-sharing-sso"
+Issues = "https://github.com/nikhilsontakke/delta-sharing-sso/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/delta_sharing_sso"]
